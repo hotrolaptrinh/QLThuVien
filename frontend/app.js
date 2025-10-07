@@ -28,56 +28,146 @@ function useApi(token) {
 }
 
 function Login({ onLoggedIn, loading }) {
+  const [mode, setMode] = useState('login');
+  const [name, setName] = useState('');
   const [email, setEmail] = useState('admin@library.local');
   const [password, setPassword] = useState('Admin123!');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    setError('');
+    if (mode === 'register') {
+      setName('');
+      setEmail('');
+      setPassword('');
+      setConfirmPassword('');
+    } else {
+      setEmail('admin@library.local');
+      setPassword('Admin123!');
+      setConfirmPassword('');
+    }
+  }, [mode]);
 
   const handleSubmit = async (event) => {
     event.preventDefault();
+    if (submitting) return;
     setError('');
+    if (mode === 'register' && password !== confirmPassword) {
+      setError('Mật khẩu xác nhận không khớp.');
+      return;
+    }
+    setSubmitting(true);
     try {
-      const res = await fetch(`${API_BASE}/api/auth/login`, {
+      const endpoint = mode === 'login' ? '/api/auth/login' : '/api/auth/register';
+      const payload = mode === 'login' ? { email, password } : { name, email, password };
+      const res = await fetch(`${API_BASE}${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify(payload),
       });
       const data = await res.json();
       if (!res.ok) {
-        throw new Error(data.message || 'Đăng nhập thất bại');
+        throw new Error(data.message || (mode === 'login' ? 'Đăng nhập thất bại' : 'Đăng ký thất bại'));
       }
       onLoggedIn(data);
     } catch (err) {
       setError(err.message);
+    } finally {
+      setSubmitting(false);
     }
   };
+
+  const formChildren = [];
+  const isProcessing = loading || submitting;
+  if (mode === 'register') {
+    formChildren.push(
+      React.createElement('label', { key: 'name-label' }, 'Họ và tên'),
+      React.createElement('input', {
+        key: 'name-input',
+        value: name,
+        onChange: (e) => setName(e.target.value),
+        type: 'text',
+        placeholder: 'Nguyễn Văn A',
+        required: true,
+        disabled: isProcessing,
+      })
+    );
+  }
+  formChildren.push(
+    React.createElement('label', { key: 'email-label' }, 'Email'),
+    React.createElement('input', {
+      key: 'email-input',
+      value: email,
+      onChange: (e) => setEmail(e.target.value),
+      type: 'email',
+      placeholder: 'you@example.com',
+      required: true,
+      disabled: isProcessing,
+    }),
+    React.createElement('label', { key: 'password-label' }, 'Mật khẩu'),
+    React.createElement('input', {
+      key: 'password-input',
+      value: password,
+      onChange: (e) => setPassword(e.target.value),
+      type: 'password',
+      placeholder: '••••••••',
+      required: true,
+      minLength: 6,
+      disabled: isProcessing,
+    })
+  );
+  if (mode === 'register') {
+    formChildren.push(
+      React.createElement('label', { key: 'confirm-label' }, 'Xác nhận mật khẩu'),
+      React.createElement('input', {
+        key: 'confirm-input',
+        value: confirmPassword,
+        onChange: (e) => setConfirmPassword(e.target.value),
+        type: 'password',
+        placeholder: 'Nhập lại mật khẩu',
+        required: true,
+        minLength: 6,
+        disabled: isProcessing,
+      })
+    );
+  }
+  formChildren.push(
+    React.createElement('button', {
+      key: 'submit',
+      type: 'submit',
+      disabled: isProcessing,
+    }, isProcessing ? 'Đang xử lý...' : mode === 'login' ? 'Đăng nhập' : 'Đăng ký')
+  );
 
   return (
     React.createElement('div', { className: 'login-wrapper' },
       React.createElement('div', { className: 'card login-card' },
-        React.createElement('h2', null, 'Đăng nhập quản lý thư viện'),
-        error && React.createElement('div', { className: 'alert' }, error),
-        React.createElement('form', { onSubmit: handleSubmit },
-          React.createElement('label', null, 'Email'),
-          React.createElement('input', {
-            value: email,
-            onChange: (e) => setEmail(e.target.value),
-            type: 'email',
-            placeholder: 'you@example.com',
-            required: true,
-          }),
-          React.createElement('label', null, 'Mật khẩu'),
-          React.createElement('input', {
-            value: password,
-            onChange: (e) => setPassword(e.target.value),
-            type: 'password',
-            placeholder: '••••••••',
-            required: true,
-          }),
-          React.createElement('button', { type: 'submit', disabled: loading }, loading ? 'Đang đăng nhập...' : 'Đăng nhập')
+        React.createElement('h2', null, mode === 'login' ? 'Đăng nhập quản lý thư viện' : 'Tạo tài khoản thư viện'),
+        React.createElement('div', { className: 'auth-tabs' },
+          React.createElement('button', {
+            type: 'button',
+            className: `tab ${mode === 'login' ? 'active' : ''}`,
+            onClick: () => setMode('login'),
+            disabled: submitting,
+          }, 'Đăng nhập'),
+          React.createElement('button', {
+            type: 'button',
+            className: `tab ${mode === 'register' ? 'active' : ''}`,
+            onClick: () => setMode('register'),
+            disabled: submitting,
+          }, 'Đăng ký')
         ),
-        React.createElement('p', { style: { fontSize: 13, color: '#64748b', marginTop: 12 } },
-          'Tài khoản mặc định: admin@library.local / Admin123!'
-        )
+        error && React.createElement('div', { className: 'alert' }, error),
+        React.createElement('form', { onSubmit: handleSubmit }, formChildren),
+        mode === 'login' ?
+          React.createElement('p', { style: { fontSize: 13, color: '#64748b', marginTop: 12 } },
+            'Tài khoản mặc định: admin@library.local / Admin123!'
+          ) :
+          React.createElement('p', { style: { fontSize: 13, color: '#64748b', marginTop: 12 } },
+            'Sau khi đăng ký bạn có thể đăng nhập và gửi yêu cầu mượn sách.'
+          )
       )
     )
   );
@@ -209,32 +299,171 @@ function BooksSection({ api, user, categories, publishers, onRefresh }) {
   );
 }
 
-function SimpleManager({ title, placeholder, items, onCreate }) {
+function SimpleManager({ title, placeholder, items, onCreate, onUpdate, onDelete }) {
   const [value, setValue] = useState('');
+  const [editingId, setEditingId] = useState(null);
+  const [editingValue, setEditingValue] = useState('');
+  const [pendingAction, setPendingAction] = useState(null);
+
+  const handleCreate = async (event) => {
+    event.preventDefault();
+    const nextValue = value.trim();
+    if (!nextValue) return;
+    try {
+      setPendingAction('create');
+      await onCreate(nextValue);
+      setValue('');
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setPendingAction(null);
+    }
+  };
+
+  const startEdit = (item) => {
+    setEditingId(item.id);
+    setEditingValue(item.name);
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditingValue('');
+  };
+
+  const saveEdit = async (id) => {
+    const nextValue = editingValue.trim();
+    if (!nextValue) return;
+    try {
+      setPendingAction('update');
+      await onUpdate(id, nextValue);
+      cancelEdit();
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setPendingAction(null);
+    }
+  };
+
+  const removeItem = async (item) => {
+    if (!window.confirm(`Bạn có chắc chắn muốn xoá "${item.name}"?`)) {
+      return;
+    }
+    try {
+      setPendingAction('delete');
+      await onDelete(item.id);
+      if (editingId === item.id) {
+        cancelEdit();
+      }
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setPendingAction(null);
+    }
+  };
+
+  const isBusy = pendingAction !== null;
+
+  const listContent =
+    items.length === 0
+      ? [React.createElement('p', { className: 'empty', key: 'empty' }, 'Chưa có dữ liệu.')]
+      : items.map((item) => {
+          if (editingId === item.id) {
+            return React.createElement(
+              'div',
+              { className: 'manager-item', key: item.id },
+              React.createElement('input', {
+                value: editingValue,
+                onChange: (e) => setEditingValue(e.target.value),
+                onKeyDown: (event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault();
+                    saveEdit(item.id);
+                  }
+                },
+                disabled: isBusy,
+              }),
+              React.createElement(
+                'div',
+                { className: 'manager-actions' },
+                React.createElement(
+                  'button',
+                  {
+                    type: 'button',
+                    onClick: () => saveEdit(item.id),
+                    disabled: isBusy,
+                  },
+                  pendingAction === 'update' ? 'Đang lưu...' : 'Lưu'
+                ),
+                React.createElement(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'secondary',
+                    onClick: cancelEdit,
+                    disabled: isBusy,
+                  },
+                  'Huỷ'
+                )
+              )
+            );
+          }
+          return React.createElement(
+            'div',
+            { className: 'manager-item', key: item.id },
+            React.createElement('span', null, item.name),
+            React.createElement(
+              'div',
+              { className: 'manager-actions' },
+              React.createElement(
+                'button',
+                {
+                  type: 'button',
+                  className: 'secondary',
+                  onClick: () => startEdit(item),
+                  disabled: isBusy,
+                },
+                'Sửa'
+              ),
+              React.createElement(
+                'button',
+                {
+                  type: 'button',
+                  className: 'danger',
+                  onClick: () => removeItem(item),
+                  disabled: isBusy,
+                },
+                pendingAction === 'delete' ? 'Đang xoá...' : 'Xoá'
+              )
+            )
+          );
+        });
+
   return (
-    React.createElement('div', { className: 'card' },
+    React.createElement(
+      'div',
+      { className: 'card' },
       React.createElement('h3', null, title),
-      React.createElement('form', {
-        onSubmit: async (event) => {
-          event.preventDefault();
-          if (!value.trim()) return;
-          await onCreate(value.trim());
-          setValue('');
-        },
-      },
-        React.createElement('div', { style: { display: 'flex', gap: 12 } },
+      React.createElement(
+        'form',
+        { onSubmit: handleCreate },
+        React.createElement(
+          'div',
+          { className: 'manager-create' },
           React.createElement('input', {
             value: value,
             onChange: (e) => setValue(e.target.value),
             placeholder,
             required: true,
+            disabled: isBusy,
           }),
-          React.createElement('button', { type: 'submit' }, 'Thêm')
+          React.createElement(
+            'button',
+            { type: 'submit', disabled: isBusy },
+            pendingAction === 'create' ? 'Đang lưu...' : 'Thêm'
+          )
         )
       ),
-      React.createElement('div', { style: { marginTop: 16, display: 'flex', gap: 8, flexWrap: 'wrap' } },
-        items.map((item) => React.createElement('span', { className: 'tag', key: item.id }, item.name))
-      )
+      React.createElement('div', { className: 'manager-list' }, listContent)
     )
   );
 }
@@ -355,7 +584,22 @@ function AdminManagement({ api, categories, publishers, refresh }) {
       method: 'POST',
       body: JSON.stringify({ name }),
     });
-    refresh();
+    await refresh();
+  };
+
+  const updateCategory = async (id, name) => {
+    await api(`/api/categories/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify({ name }),
+    });
+    await refresh();
+  };
+
+  const removeCategory = async (id) => {
+    await api(`/api/categories/${id}`, {
+      method: 'DELETE',
+    });
+    await refresh();
   };
 
   const addPublisher = async (name) => {
@@ -363,13 +607,42 @@ function AdminManagement({ api, categories, publishers, refresh }) {
       method: 'POST',
       body: JSON.stringify({ name }),
     });
-    refresh();
+    await refresh();
+  };
+
+  const updatePublisher = async (id, name) => {
+    await api(`/api/publishers/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify({ name }),
+    });
+    await refresh();
+  };
+
+  const removePublisher = async (id) => {
+    await api(`/api/publishers/${id}`, {
+      method: 'DELETE',
+    });
+    await refresh();
   };
 
   return (
     React.createElement('div', { className: 'grid two' },
-      React.createElement(SimpleManager, { title: 'Thể loại', placeholder: 'Nhập tên thể loại', items: categories, onCreate: addCategory }),
-      React.createElement(SimpleManager, { title: 'Nhà xuất bản', placeholder: 'Nhập tên nhà xuất bản', items: publishers, onCreate: addPublisher })
+      React.createElement(SimpleManager, {
+        title: 'Thể loại',
+        placeholder: 'Nhập tên thể loại',
+        items: categories,
+        onCreate: addCategory,
+        onUpdate: updateCategory,
+        onDelete: removeCategory,
+      }),
+      React.createElement(SimpleManager, {
+        title: 'Nhà xuất bản',
+        placeholder: 'Nhập tên nhà xuất bản',
+        items: publishers,
+        onCreate: addPublisher,
+        onUpdate: updatePublisher,
+        onDelete: removePublisher,
+      })
     )
   );
 }

@@ -53,8 +53,35 @@ button.secondary {
   border: 1px solid var(--border);
 }
 
+button.danger {
+  background: #dc2626;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+button.tab {
+  background: transparent;
+  color: var(--secondary);
+  border: none;
+  border-radius: 999px;
+  padding: 8px 12px;
+  flex: 1;
+}
+
 button:hover {
   filter: brightness(0.95);
+}
+
+button.tab:hover {
+  filter: none;
+}
+
+button.tab.active {
+  background: var(--primary);
+  color: #fff;
 }
 
 .card {
@@ -64,6 +91,15 @@ button:hover {
   border: 1px solid var(--border);
   box-shadow: 0 8px 16px rgba(15, 23, 42, 0.08);
   margin-bottom: 24px;
+}
+
+.auth-tabs {
+  display: flex;
+  gap: 8px;
+  background: rgba(226, 232, 240, 0.6);
+  padding: 4px;
+  border-radius: 999px;
+  margin-bottom: 16px;
 }
 
 form {
@@ -132,6 +168,52 @@ input, select, textarea {
   border-radius: 999px;
   font-size: 12px;
   margin-right: 8px;
+}
+
+.manager-create {
+  display: flex;
+  gap: 12px;
+}
+
+.manager-create input {
+  flex: 1;
+}
+
+.manager-list {
+  margin-top: 16px;
+  display: grid;
+  gap: 12px;
+}
+
+.manager-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: rgba(248, 250, 252, 0.8);
+}
+
+.manager-item span {
+  font-weight: 600;
+}
+
+.manager-item input {
+  flex: 1;
+}
+
+.manager-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.empty {
+  margin: 0;
+  color: #94a3b8;
+  font-size: 14px;
 }
 
 .login-wrapper {

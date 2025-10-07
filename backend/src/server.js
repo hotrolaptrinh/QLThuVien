@@ -364,34 +364,47 @@ async function handleAuthRoutes(req, res, pathname) {
         send(res, 400, { message: 'Thiếu thông tin bắt buộc.' });
         return true;
       }
-      const countResult = await query('SELECT COUNT(*)::int AS count FROM users');
-      const count = Number(countResult.rows[0]?.count || 0);
-      const requester = await loadUserFromRequest(req);
-      if (count > 0 && (!requester || requester.role !== 'admin')) {
-        send(res, 403, { message: 'Chỉ quản lý mới có thể tạo người dùng.' });
+      const passwordValue = String(password);
+      if (passwordValue.length < 6) {
+        send(res, 400, { message: 'Mật khẩu phải có ít nhất 6 ký tự.' });
         return true;
       }
-      const lowerEmail = email.toLowerCase();
+      const requester = await loadUserFromRequest(req);
+      const lowerEmail = String(email).trim().toLowerCase();
+      const trimmedName = String(name).trim();
+      if (!trimmedName) {
+        send(res, 400, { message: 'Tên không được để trống.' });
+        return true;
+      }
       const existing = await querySingle('SELECT id FROM users WHERE email = $1', [lowerEmail]);
       if (existing) {
         send(res, 409, { message: 'Email đã tồn tại.' });
         return true;
       }
+      let assignedRole = 'user';
+      if (String(role).toLowerCase() === 'admin') {
+        if (!requester || requester.role !== 'admin') {
+          send(res, 403, { message: 'Chỉ quản lý mới được tạo tài khoản quản trị.' });
+          return true;
+        }
+        assignedRole = 'admin';
+      }
       const now = new Date().toISOString();
       const user = {
         id: crypto.randomUUID(),
-        name,
+        name: trimmedName,
         email: lowerEmail,
-        role: role === 'admin' ? 'admin' : 'user',
-        password: hashPassword(password),
+        role: assignedRole,
+        password: hashPassword(passwordValue),
         createdAt: now,
         updatedAt: now,
       };
       const payload = toDbRecord('users', user);
       const { text, values } = buildInsert('users', payload);
       const inserted = await query(text, values);
-      const data = inserted.rows[0];
-      send(res, 201, { user: fromDbRecord('users', data) });
+      const createdUser = fromDbRecord('users', inserted.rows[0]);
+      const token = signToken({ id: createdUser.id, role: createdUser.role });
+      send(res, 201, { token, user: createdUser, expiresIn: TOKEN_EXPIRY_SECONDS });
       return true;
     } catch (error) {
       send(res, 400, { message: error.message });
