@@ -1,0 +1,17 @@
+{
+  "users": [
+    {
+      "id": "d348e34b-38a5-4a95-b484-2d2c2d3ede7f",
+      "name": "Thư viện Admin",
+      "email": "admin@library.local",
+      "role": "admin",
+      "password": "112d777fef752217dbbdfa5b3eec971e:5deb7bd48889b166288842660fa49d88ae86d9b9e630d5b7df40f545cef90b42f9f6e3ed7b4f104e5797394f18afe1758d9971484b71e9ca0ad9c7727557bad0",
+      "createdAt": "2025-10-07T07:11:03.598Z"
+    }
+  ],
+  "categories": [],
+  "publishers": [],
+  "books": [],
+  "borrowings": [],
+  "borrowingDetails": []
+}

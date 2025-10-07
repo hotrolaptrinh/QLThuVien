@@ -1,0 +1,13 @@
+{
+  "name": "library-backend",
+  "version": "1.0.0",
+  "description": "Simple library management REST API with JWT authentication",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js"
+  },
+  "keywords": ["library", "rest", "jwt"],
+  "author": "",
+  "license": "MIT",
+  "type": "commonjs"
+}
