@@ -1,6 +1,6 @@
 # Library Management Backend
 
-Backend REST API viết bằng Node.js thuần, lưu dữ liệu trong Supabase PostgreSQL và xác thực JWT tự quản lý.
+Backend REST API viết bằng Node.js thuần, lưu dữ liệu trong Supabase PostgreSQL (kết nối qua pooler Postgres) và xác thực JWT tự quản lý.
 
 ## Cấu hình môi trường
 
@@ -9,11 +9,10 @@ Tạo file `.env` trong thư mục `backend/` với các biến sau:
 ```env
 PORT=4000
 JWT_SECRET=your-jwt-secret
-SUPABASE_URL=https://your-project-ref.supabase.co
-SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
+SUPABASE_DB_URL=postgresql://postgres.rayvltpeewuofefeasxc:[YOUR-PASSWORD]@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres
 ```
 
-> ⚠️ Chỉ sử dụng Service Role Key ở môi trường backend (không commit lên git, không dùng phía client). Bạn có thể đặt `SUPABASE_SERVICE_ROLE_KEY` trong biến môi trường khi triển khai thay vì ghi trực tiếp vào file.
+> 🔐 Chuỗi kết nối có thể lấy trong Supabase Dashboard → Project Settings → Database → Connection string → `pooler`. Đừng commit mật khẩu lên git.
 
 ## Thiết lập cơ sở dữ liệu Supabase
 
