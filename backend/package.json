@@ -1,0 +1,23 @@
+{
+  "name": "library-backend",
+  "version": "1.2.0",
+  "description": "Simple library management REST API with Supabase PostgreSQL persistence and JWT authentication",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js"
+  },
+  "keywords": [
+    "library",
+    "rest",
+    "jwt",
+    "supabase",
+    "postgres"
+  ],
+  "author": "",
+  "license": "MIT",
+  "type": "commonjs",
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "pg": "^8.11.5"
+  }
+}
