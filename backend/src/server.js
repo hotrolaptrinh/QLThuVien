@@ -1,41 +1,99 @@
 const http = require('http');
 const url = require('url');
-const fs = require('fs');
-const path = require('path');
 const crypto = require('crypto');
+const { createClient } = require('@supabase/supabase-js');
+require('dotenv').config();
 
 const PORT = process.env.PORT || 4000;
-const DATA_DIR = path.join(__dirname, '..', 'data');
-const DB_FILE = path.join(DATA_DIR, 'db.json');
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
 const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-library-key';
 const TOKEN_EXPIRY_SECONDS = 60 * 60 * 8; // 8 hours
 
-function ensureDataFile() {
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-  }
-  if (!fs.existsSync(DB_FILE)) {
-    const initial = {
-      users: [],
-      categories: [],
-      publishers: [],
-      books: [],
-      borrowings: [],
-      borrowingDetails: [],
-    };
-    fs.writeFileSync(DB_FILE, JSON.stringify(initial, null, 2));
-  }
+if (!SUPABASE_URL || !SUPABASE_KEY) {
+  console.error('❌ Missing Supabase configuration. Please set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in your environment.');
+  process.exit(1);
 }
 
-function readDb() {
-  ensureDataFile();
-  const raw = fs.readFileSync(DB_FILE, 'utf8');
-  return JSON.parse(raw);
-}
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
+  auth: { persistSession: false },
+});
 
-function writeDb(data) {
-  fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
-}
+const TABLES = {
+  users: {
+    columns: {
+      id: 'id',
+      name: 'name',
+      email: 'email',
+      role: 'role',
+      password: 'password_hash',
+      createdAt: 'created_at',
+      updatedAt: 'updated_at',
+    },
+    omitOnReturn: ['password'],
+  },
+  categories: {
+    columns: {
+      id: 'id',
+      name: 'name',
+      description: 'description',
+      createdAt: 'created_at',
+      updatedAt: 'updated_at',
+    },
+  },
+  publishers: {
+    columns: {
+      id: 'id',
+      name: 'name',
+      address: 'address',
+      phone: 'phone',
+      createdAt: 'created_at',
+      updatedAt: 'updated_at',
+    },
+  },
+  books: {
+    columns: {
+      id: 'id',
+      title: 'title',
+      author: 'author',
+      categoryId: 'category_id',
+      publisherId: 'publisher_id',
+      quantity: 'quantity',
+      createdAt: 'created_at',
+      updatedAt: 'updated_at',
+    },
+  },
+  borrowings: {
+    columns: {
+      id: 'id',
+      userId: 'user_id',
+      borrowDate: 'borrow_date',
+      expectedReturnDate: 'expected_return_date',
+      status: 'status',
+      notes: 'notes',
+      processedAt: 'processed_at',
+      returnedAt: 'returned_at',
+      createdAt: 'created_at',
+      updatedAt: 'updated_at',
+    },
+  },
+  borrowingDetails: {
+    columns: {
+      id: 'id',
+      borrowingId: 'borrowing_id',
+      bookId: 'book_id',
+      quantity: 'quantity',
+      createdAt: 'created_at',
+    },
+  },
+};
+
+const REVERSE_TABLES = Object.fromEntries(
+  Object.entries(TABLES).map(([name, config]) => [
+    name,
+    Object.fromEntries(Object.entries(config.columns).map(([apiKey, dbKey]) => [dbKey, apiKey])),
+  ])
+);
 
 function base64UrlEncode(buffer) {
   return buffer
@@ -93,6 +151,36 @@ function verifyPassword(password, stored) {
   return verifyHash === hash;
 }
 
+function toDbRecord(table, data) {
+  const config = TABLES[table];
+  if (!config) throw new Error(`Unknown table mapping for ${table}`);
+  const result = {};
+  for (const [apiKey, dbKey] of Object.entries(config.columns)) {
+    if (data[apiKey] !== undefined) {
+      result[dbKey] = data[apiKey];
+    }
+  }
+  return result;
+}
+
+function fromDbRecord(table, record, { includeInternal = false } = {}) {
+  if (!record) return null;
+  const config = TABLES[table];
+  if (!config) throw new Error(`Unknown table mapping for ${table}`);
+  const result = {};
+  const omit = new Set(includeInternal ? [] : config.omitOnReturn || []);
+  for (const [dbKey, apiKey] of Object.entries(REVERSE_TABLES[table])) {
+    if (!omit.has(apiKey) && record[dbKey] !== undefined) {
+      result[apiKey] = record[dbKey];
+    }
+  }
+  return result;
+}
+
+function mapDbList(table, records, options) {
+  return (records || []).map((record) => fromDbRecord(table, record, options));
+}
+
 function parseBody(req) {
   return new Promise((resolve, reject) => {
     let body = '';
@@ -143,138 +231,196 @@ function handleOptions(req, res) {
   res.end();
 }
 
-function loadUserFromRequest(req) {
+async function loadUserFromRequest(req) {
   const auth = req.headers['authorization'];
   if (!auth) return null;
   const parts = auth.split(' ');
   if (parts.length !== 2 || parts[0] !== 'Bearer') return null;
   const payload = verifyToken(parts[1]);
   if (!payload) return null;
-  const db = readDb();
-  return db.users.find((user) => user.id === payload.id) || null;
+  const { data, error } = await supabase
+    .from('users')
+    .select('*')
+    .eq('id', payload.id)
+    .maybeSingle();
+  if (error || !data) return null;
+  return fromDbRecord('users', data);
 }
 
-function ensureAdminUser() {
-  const db = readDb();
-  if (db.users.length === 0) {
-    const admin = {
-      id: crypto.randomUUID(),
-      name: 'Thư viện Admin',
-      email: 'admin@library.local',
-      role: 'admin',
-      password: hashPassword('Admin123!'),
-      createdAt: new Date().toISOString(),
-    };
-    db.users.push(admin);
-    writeDb(db);
+async function ensureAdminUser() {
+  const adminEmail = 'admin@library.local';
+  const { data: existing, error } = await supabase
+    .from('users')
+    .select('id')
+    .eq('email', adminEmail)
+    .maybeSingle();
+  if (error && error.code !== 'PGRST116') {
+    console.error('❌ Unable to verify default admin user:', error.message);
+    return;
+  }
+  if (existing) {
+    return;
+  }
+  const admin = {
+    id: crypto.randomUUID(),
+    name: 'Thư viện Admin',
+    email: adminEmail,
+    role: 'admin',
+    password: hashPassword('Admin123!'),
+    createdAt: new Date().toISOString(),
+  };
+  const payload = toDbRecord('users', admin);
+  const { error: insertError } = await supabase.from('users').insert(payload);
+  if (insertError) {
+    console.error('❌ Failed to create default admin user:', insertError.message);
+  } else {
     console.log('📘 Created default admin account: admin@library.local / Admin123!');
   }
 }
 
-function paginate(array, query) {
-  const page = Number(query.page || 1);
-  const pageSize = Math.min(Number(query.pageSize || 20), 50);
-  const start = (page - 1) * pageSize;
-  const items = array.slice(start, start + pageSize);
+function paginateResponse(items, total, page, pageSize) {
   return {
     page,
     pageSize,
-    total: array.length,
+    total,
     items,
   };
 }
 
-function handleAuthRoutes(req, res, pathname) {
+async function handleAuthRoutes(req, res, pathname) {
   if (req.method === 'POST' && pathname === '/api/auth/login') {
-    return parseBody(req)
-      .then((body) => {
-        const { email, password } = body;
-        if (!email || !password) {
-          send(res, 400, { message: 'Email và mật khẩu là bắt buộc.' });
-          return;
-        }
-        const db = readDb();
-        const user = db.users.find((u) => u.email === email.toLowerCase());
-        if (!user || !verifyPassword(password, user.password)) {
-          send(res, 401, { message: 'Email hoặc mật khẩu không đúng.' });
-          return;
-        }
-        const token = signToken({ id: user.id, role: user.role });
-        send(res, 200, {
-          token,
-          user: { id: user.id, name: user.name, email: user.email, role: user.role },
-          expiresIn: TOKEN_EXPIRY_SECONDS,
-        });
-      })
-      .catch((error) => {
-        send(res, 400, { message: error.message });
+    try {
+      const body = await parseBody(req);
+      const { email, password } = body;
+      if (!email || !password) {
+        send(res, 400, { message: 'Email và mật khẩu là bắt buộc.' });
+        return true;
+      }
+      const { data: user, error } = await supabase
+        .from('users')
+        .select('*')
+        .eq('email', email.toLowerCase())
+        .maybeSingle();
+      if (error || !user || !verifyPassword(password, user.password_hash)) {
+        send(res, 401, { message: 'Email hoặc mật khẩu không đúng.' });
+        return true;
+      }
+      const apiUser = fromDbRecord('users', user);
+      const token = signToken({ id: apiUser.id, role: apiUser.role });
+      send(res, 200, {
+        token,
+        user: apiUser,
+        expiresIn: TOKEN_EXPIRY_SECONDS,
       });
+      return true;
+    } catch (error) {
+      send(res, 400, { message: error.message });
+      return true;
+    }
   }
 
   if (req.method === 'POST' && pathname === '/api/auth/register') {
-    const currentUser = loadUserFromRequest(req);
-    return parseBody(req)
-      .then((body) => {
-        const { name, email, password, role = 'user' } = body;
-        if (!name || !email || !password) {
-          send(res, 400, { message: 'Thiếu thông tin bắt buộc.' });
-          return;
-        }
-        const db = readDb();
-        const existing = db.users.find((u) => u.email === email.toLowerCase());
-        if (existing) {
-          send(res, 409, { message: 'Email đã tồn tại.' });
-          return;
-        }
-        if (db.users.length > 0) {
-          if (!currentUser || currentUser.role !== 'admin') {
-            send(res, 403, { message: 'Chỉ quản lý mới có thể tạo người dùng.' });
-            return;
-          }
-        }
-        const user = {
-          id: crypto.randomUUID(),
-          name,
-          email: email.toLowerCase(),
-          role: role === 'admin' ? 'admin' : 'user',
-          password: hashPassword(password),
-          createdAt: new Date().toISOString(),
-        };
-        db.users.push(user);
-        writeDb(db);
-        send(res, 201, {
-          user: { id: user.id, name: user.name, email: user.email, role: user.role },
-        });
-      })
-      .catch((error) => send(res, 400, { message: error.message }));
+    try {
+      const body = await parseBody(req);
+      const { name, email, password, role = 'user' } = body;
+      if (!name || !email || !password) {
+        send(res, 400, { message: 'Thiếu thông tin bắt buộc.' });
+        return true;
+      }
+      const { count, error: countError } = await supabase
+        .from('users')
+        .select('id', { head: true, count: 'exact' });
+      if (countError) {
+        send(res, 500, { message: 'Không thể kiểm tra người dùng hiện có.' });
+        return true;
+      }
+      const requester = await loadUserFromRequest(req);
+      if (count > 0 && (!requester || requester.role !== 'admin')) {
+        send(res, 403, { message: 'Chỉ quản lý mới có thể tạo người dùng.' });
+        return true;
+      }
+      const lowerEmail = email.toLowerCase();
+      const { data: existing, error: existingError } = await supabase
+        .from('users')
+        .select('id')
+        .eq('email', lowerEmail)
+        .maybeSingle();
+      if (existingError && existingError.code !== 'PGRST116') {
+        send(res, 500, { message: 'Không thể kiểm tra email.' });
+        return true;
+      }
+      if (existing) {
+        send(res, 409, { message: 'Email đã tồn tại.' });
+        return true;
+      }
+      const user = {
+        id: crypto.randomUUID(),
+        name,
+        email: lowerEmail,
+        role: role === 'admin' ? 'admin' : 'user',
+        password: hashPassword(password),
+        createdAt: new Date().toISOString(),
+      };
+      const payload = toDbRecord('users', user);
+      const { data, error } = await supabase
+        .from('users')
+        .insert(payload)
+        .select()
+        .maybeSingle();
+      if (error || !data) {
+        send(res, 500, { message: 'Không thể tạo người dùng mới.' });
+        return true;
+      }
+      send(res, 201, { user: fromDbRecord('users', data) });
+      return true;
+    } catch (error) {
+      send(res, 400, { message: error.message });
+      return true;
+    }
   }
 
   return false;
 }
 
-function handleUsers(req, res, pathname, currentUser) {
+async function handleUsers(req, res, pathname, currentUser) {
   if (!currentUser || currentUser.role !== 'admin') {
     send(res, 403, { message: 'Yêu cầu quyền quản lý.' });
     return true;
   }
 
   if (req.method === 'GET' && pathname === '/api/users') {
-    const db = readDb();
-    const users = db.users.map(({ password, ...rest }) => rest);
-    send(res, 200, users);
+    const { data, error } = await supabase
+      .from('users')
+      .select('id, name, email, role, created_at, updated_at')
+      .order('created_at', { ascending: true });
+    if (error) {
+      send(res, 500, { message: 'Không thể lấy danh sách người dùng.' });
+      return true;
+    }
+    send(res, 200, mapDbList('users', data));
     return true;
   }
 
   if (req.method === 'DELETE' && pathname.startsWith('/api/users/')) {
     const id = pathname.split('/')[3];
-    const db = readDb();
-    const index = db.users.findIndex((u) => u.id === id);
-    if (index === -1) {
+    const { data: existing, error: existingError } = await supabase
+      .from('users')
+      .select('id')
+      .eq('id', id)
+      .maybeSingle();
+    if (existingError) {
+      send(res, 500, { message: 'Không thể kiểm tra người dùng.' });
+      return true;
+    }
+    if (!existing) {
       send(res, 404, { message: 'Không tìm thấy người dùng.' });
       return true;
     }
-    db.users.splice(index, 1);
-    writeDb(db);
+    const { error } = await supabase.from('users').delete().eq('id', id);
+    if (error) {
+      send(res, 500, { message: 'Không thể xóa người dùng.' });
+      return true;
+    }
     send(res, 204);
     return true;
   }
@@ -282,18 +428,34 @@ function handleUsers(req, res, pathname, currentUser) {
   return false;
 }
 
-function handleSimpleResource(req, res, pathname, currentUser, key) {
-  const collectionName = key;
-  const basePath = `/api/${collectionName}`;
+async function handleSimpleResource(req, res, pathname, currentUser, tableName) {
+  const config = TABLES[tableName];
+  if (!config) return false;
+  const basePath = `/api/${tableName}`;
+
   if (req.method === 'GET' && pathname === basePath) {
-    const db = readDb();
-    const search = url.parse(req.url, true).query.search || '';
-    const items = db[collectionName]
-      .filter((item) =>
-        !search || item.name?.toLowerCase().includes(search.toLowerCase()) || item.title?.toLowerCase().includes(search.toLowerCase())
-      )
-      .sort((a, b) => a.name?.localeCompare?.(b.name || '') || 0);
-    send(res, 200, paginate(items, url.parse(req.url, true).query));
+    const queryParams = url.parse(req.url, true).query;
+    const search = queryParams.search || '';
+    const page = Math.max(Number(queryParams.page || 1), 1);
+    const pageSize = Math.min(Number(queryParams.pageSize || 20), 50);
+    const start = (page - 1) * pageSize;
+    const end = start + pageSize - 1;
+
+    let query = supabase
+      .from(tableName)
+      .select('*', { count: 'exact' })
+      .range(start, end);
+
+    if (search) {
+      query = query.or(`name.ilike.%${search}%,title.ilike.%${search}%`);
+    }
+
+    const { data, error, count } = await query;
+    if (error) {
+      send(res, 500, { message: `Không thể lấy danh sách ${tableName}.` });
+      return true;
+    }
+    send(res, 200, paginateResponse(mapDbList(tableName, data), count ?? 0, page, pageSize));
     return true;
   }
 
@@ -302,19 +464,29 @@ function handleSimpleResource(req, res, pathname, currentUser, key) {
       send(res, 403, { message: 'Yêu cầu quyền quản lý.' });
       return true;
     }
-    return parseBody(req)
-      .then((body) => {
-        const db = readDb();
-        const item = {
-          id: crypto.randomUUID(),
-          ...body,
-          createdAt: new Date().toISOString(),
-        };
-        db[collectionName].push(item);
-        writeDb(db);
-        send(res, 201, item);
-      })
-      .catch((error) => send(res, 400, { message: error.message }));
+    try {
+      const body = await parseBody(req);
+      const record = {
+        id: crypto.randomUUID(),
+        ...body,
+        createdAt: new Date().toISOString(),
+      };
+      const payload = toDbRecord(tableName, record);
+      const { data, error } = await supabase
+        .from(tableName)
+        .insert(payload)
+        .select()
+        .maybeSingle();
+      if (error || !data) {
+        send(res, 500, { message: `Không thể tạo ${tableName}.` });
+        return true;
+      }
+      send(res, 201, fromDbRecord(tableName, data));
+      return true;
+    } catch (error) {
+      send(res, 400, { message: error.message });
+      return true;
+    }
   }
 
   if (req.method === 'PUT' && pathname.startsWith(`${basePath}/`)) {
@@ -323,23 +495,32 @@ function handleSimpleResource(req, res, pathname, currentUser, key) {
       return true;
     }
     const id = pathname.split('/')[3];
-    return parseBody(req)
-      .then((body) => {
-        const db = readDb();
-        const index = db[collectionName].findIndex((item) => item.id === id);
-        if (index === -1) {
-          send(res, 404, { message: 'Không tìm thấy bản ghi.' });
-          return;
-        }
-        db[collectionName][index] = {
-          ...db[collectionName][index],
-          ...body,
-          updatedAt: new Date().toISOString(),
-        };
-        writeDb(db);
-        send(res, 200, db[collectionName][index]);
-      })
-      .catch((error) => send(res, 400, { message: error.message }));
+    try {
+      const body = await parseBody(req);
+      const payload = toDbRecord(tableName, {
+        ...body,
+        updatedAt: new Date().toISOString(),
+      });
+      const { data, error } = await supabase
+        .from(tableName)
+        .update(payload)
+        .eq('id', id)
+        .select()
+        .maybeSingle();
+      if (error) {
+        send(res, 500, { message: `Không thể cập nhật ${tableName}.` });
+        return true;
+      }
+      if (!data) {
+        send(res, 404, { message: 'Không tìm thấy bản ghi.' });
+        return true;
+      }
+      send(res, 200, fromDbRecord(tableName, data));
+      return true;
+    } catch (error) {
+      send(res, 400, { message: error.message });
+      return true;
+    }
   }
 
   if (req.method === 'DELETE' && pathname.startsWith(`${basePath}/`)) {
@@ -348,14 +529,24 @@ function handleSimpleResource(req, res, pathname, currentUser, key) {
       return true;
     }
     const id = pathname.split('/')[3];
-    const db = readDb();
-    const index = db[collectionName].findIndex((item) => item.id === id);
-    if (index === -1) {
+    const { data: existing, error: existingError } = await supabase
+      .from(tableName)
+      .select('id')
+      .eq('id', id)
+      .maybeSingle();
+    if (existingError) {
+      send(res, 500, { message: `Không thể kiểm tra ${tableName}.` });
+      return true;
+    }
+    if (!existing) {
       send(res, 404, { message: 'Không tìm thấy bản ghi.' });
       return true;
     }
-    db[collectionName].splice(index, 1);
-    writeDb(db);
+    const { error } = await supabase.from(tableName).delete().eq('id', id);
+    if (error) {
+      send(res, 500, { message: `Không thể xóa ${tableName}.` });
+      return true;
+    }
     send(res, 204);
     return true;
   }
@@ -363,95 +554,158 @@ function handleSimpleResource(req, res, pathname, currentUser, key) {
   return false;
 }
 
-function handleBooks(req, res, pathname, currentUser) {
-  if (handleSimpleResource(req, res, pathname, currentUser, 'books')) {
+async function handleBooks(req, res, pathname, currentUser) {
+  if (await handleSimpleResource(req, res, pathname, currentUser, 'books')) {
     return true;
   }
   if (req.method === 'GET' && pathname.startsWith('/api/books/')) {
     const id = pathname.split('/')[3];
-    const db = readDb();
-    const book = db.books.find((b) => b.id === id);
-    if (!book) {
+    const { data, error } = await supabase
+      .from('books')
+      .select('*')
+      .eq('id', id)
+      .maybeSingle();
+    if (error) {
+      send(res, 500, { message: 'Không thể lấy thông tin sách.' });
+      return true;
+    }
+    if (!data) {
       send(res, 404, { message: 'Không tìm thấy sách.' });
       return true;
     }
-    send(res, 200, book);
+    send(res, 200, fromDbRecord('books', data));
     return true;
   }
   return false;
 }
 
-function handleBorrowings(req, res, pathname, currentUser) {
+async function handleBorrowings(req, res, pathname, currentUser) {
   if (!currentUser) {
     send(res, 401, { message: 'Yêu cầu đăng nhập.' });
     return true;
   }
-  const db = readDb();
 
   if (req.method === 'GET' && pathname === '/api/borrowings') {
-    const results = db.borrowings
-      .filter((b) => currentUser.role === 'admin' || b.userId === currentUser.id)
-      .map((borrow) => ({
-        ...borrow,
-        items: db.borrowingDetails.filter((detail) => detail.borrowingId === borrow.id),
-      }))
-      .sort((a, b) => new Date(b.borrowDate) - new Date(a.borrowDate));
-    send(res, 200, results);
+    let query = supabase
+      .from('borrowings')
+      .select('*')
+      .order('borrow_date', { ascending: false });
+    if (currentUser.role !== 'admin') {
+      query = query.eq('user_id', currentUser.id);
+    }
+    const { data: borrowings, error } = await query;
+    if (error) {
+      send(res, 500, { message: 'Không thể lấy danh sách phiếu mượn.' });
+      return true;
+    }
+    const ids = (borrowings || []).map((b) => b.id);
+    let details = [];
+    if (ids.length > 0) {
+      const { data: detailRows, error: detailError } = await supabase
+        .from('borrowing_details')
+        .select('*')
+        .in('borrowing_id', ids);
+      if (detailError) {
+        send(res, 500, { message: 'Không thể lấy chi tiết phiếu mượn.' });
+        return true;
+      }
+      details = detailRows || [];
+    }
+    const detailsByBorrow = details.reduce((acc, detail) => {
+      const key = detail.borrowing_id;
+      acc[key] = acc[key] || [];
+      acc[key].push(fromDbRecord('borrowingDetails', detail));
+      return acc;
+    }, {});
+    const payload = mapDbList('borrowings', borrowings).map((borrow) => ({
+      ...borrow,
+      items: detailsByBorrow[borrow.id] || [],
+    }));
+    send(res, 200, payload);
     return true;
   }
 
   if (req.method === 'POST' && pathname === '/api/borrowings') {
-    return parseBody(req)
-      .then((body) => {
-        const { items } = body;
-        if (!Array.isArray(items) || items.length === 0) {
-          send(res, 400, { message: 'Yêu cầu ít nhất một sách.' });
-          return;
+    try {
+      const body = await parseBody(req);
+      const { items, expectedReturnDate = null, notes = '' } = body;
+      if (!Array.isArray(items) || items.length === 0) {
+        send(res, 400, { message: 'Yêu cầu ít nhất một sách.' });
+        return true;
+      }
+      const bookIds = items.map((item) => item.bookId);
+      const { data: books, error: booksError } = await supabase
+        .from('books')
+        .select('id, quantity')
+        .in('id', bookIds);
+      if (booksError) {
+        send(res, 500, { message: 'Không thể kiểm tra số lượng sách.' });
+        return true;
+      }
+      const bookMap = new Map(books.map((book) => [book.id, book]));
+      for (const item of items) {
+        const book = bookMap.get(item.bookId);
+        if (!book) {
+          send(res, 404, { message: `Không tìm thấy sách với id ${item.bookId}.` });
+          return true;
         }
-        const borrowId = crypto.randomUUID();
-        const now = new Date().toISOString();
-
-        for (const item of items) {
-          const book = db.books.find((b) => b.id === item.bookId);
-          if (!book) {
-            send(res, 404, { message: `Không tìm thấy sách với id ${item.bookId}.` });
-            return;
-          }
-          if (book.quantity < item.quantity) {
-            send(res, 400, { message: `Sách ${book.title} không đủ số lượng.` });
-            return;
-          }
+        if (book.quantity < item.quantity) {
+          send(res, 400, { message: `Sách ${item.bookId} không đủ số lượng.` });
+          return true;
         }
-
-        const borrowing = {
-          id: borrowId,
-          userId: currentUser.id,
-          borrowDate: now,
-          expectedReturnDate: body.expectedReturnDate || null,
-          status: 'pending',
-          notes: body.notes || '',
+      }
+      const now = new Date().toISOString();
+      const borrowingId = crypto.randomUUID();
+      const borrowingRecord = toDbRecord('borrowings', {
+        id: borrowingId,
+        userId: currentUser.id,
+        borrowDate: now,
+        expectedReturnDate,
+        status: 'pending',
+        notes,
+        createdAt: now,
+      });
+      const { error: insertError } = await supabase.from('borrowings').insert(borrowingRecord);
+      if (insertError) {
+        send(res, 500, { message: 'Không thể tạo phiếu mượn.' });
+        return true;
+      }
+      const detailRecords = items.map((item) =>
+        toDbRecord('borrowingDetails', {
+          id: crypto.randomUUID(),
+          borrowingId: borrowingId,
+          bookId: item.bookId,
+          quantity: item.quantity,
           createdAt: now,
-        };
-        db.borrowings.push(borrowing);
-
-        for (const item of items) {
-          const detail = {
-            id: crypto.randomUUID(),
-            borrowingId: borrowId,
-            bookId: item.bookId,
-            quantity: item.quantity,
-          };
-          db.borrowingDetails.push(detail);
-          const book = db.books.find((b) => b.id === item.bookId);
-          book.quantity -= item.quantity;
+        })
+      );
+      const { error: detailError } = await supabase.from('borrowing_details').insert(detailRecords);
+      if (detailError) {
+        send(res, 500, { message: 'Không thể lưu chi tiết phiếu mượn.' });
+        return true;
+      }
+      for (const item of items) {
+        const book = bookMap.get(item.bookId);
+        const { error: updateError } = await supabase
+          .from('books')
+          .update({ quantity: book.quantity - item.quantity })
+          .eq('id', item.bookId);
+        if (updateError) {
+          send(res, 500, { message: 'Không thể cập nhật số lượng sách.' });
+          return true;
         }
-        writeDb(db);
-        send(res, 201, {
-          ...borrowing,
-          items: db.borrowingDetails.filter((d) => d.borrowingId === borrowId),
-        });
-      })
-      .catch((error) => send(res, 400, { message: error.message }));
+      }
+      send(res, 201, {
+        ...fromDbRecord('borrowings', {
+          ...borrowingRecord,
+        }),
+        items: detailRecords.map((record) => fromDbRecord('borrowingDetails', record)),
+      });
+      return true;
+    } catch (error) {
+      send(res, 400, { message: error.message });
+      return true;
+    }
   }
 
   if (req.method === 'PATCH' && pathname.startsWith('/api/borrowings/')) {
@@ -460,96 +714,149 @@ function handleBorrowings(req, res, pathname, currentUser) {
       return true;
     }
     const id = pathname.split('/')[3];
-    return parseBody(req)
-      .then((body) => {
-        const index = db.borrowings.findIndex((b) => b.id === id);
-        if (index === -1) {
-          send(res, 404, { message: 'Không tìm thấy phiếu mượn.' });
-          return;
+    try {
+      const body = await parseBody(req);
+      const { data: borrowing, error: borrowError } = await supabase
+        .from('borrowings')
+        .select('*')
+        .eq('id', id)
+        .maybeSingle();
+      if (borrowError) {
+        send(res, 500, { message: 'Không thể lấy phiếu mượn.' });
+        return true;
+      }
+      if (!borrowing) {
+        send(res, 404, { message: 'Không tìm thấy phiếu mượn.' });
+        return true;
+      }
+      const updates = {};
+      if (body.status === 'approved' || body.status === 'rejected') {
+        updates.status = body.status;
+        updates.processedAt = new Date().toISOString();
+      }
+      if (body.status === 'returned') {
+        if (borrowing.status !== 'approved') {
+          send(res, 400, { message: 'Chỉ phiếu đã duyệt mới có thể trả.' });
+          return true;
         }
-        const borrowing = db.borrowings[index];
-        if (body.status === 'approved' || body.status === 'rejected') {
-          borrowing.status = body.status;
-          borrowing.processedAt = new Date().toISOString();
+        updates.status = 'returned';
+        updates.returnedAt = new Date().toISOString();
+        const { data: details, error: detailError } = await supabase
+          .from('borrowing_details')
+          .select('*')
+          .eq('borrowing_id', id);
+        if (detailError) {
+          send(res, 500, { message: 'Không thể lấy chi tiết phiếu mượn.' });
+          return true;
         }
-        if (body.status === 'returned') {
-          if (borrowing.status !== 'approved') {
-            send(res, 400, { message: 'Chỉ phiếu đã duyệt mới có thể trả.' });
-            return;
+        for (const detail of details || []) {
+          const { data: book, error: bookError } = await supabase
+            .from('books')
+            .select('quantity')
+            .eq('id', detail.book_id)
+            .maybeSingle();
+          if (bookError || !book) {
+            send(res, 500, { message: 'Không thể cập nhật sách khi trả.' });
+            return true;
           }
-          borrowing.status = 'returned';
-          borrowing.returnedAt = new Date().toISOString();
-          const details = db.borrowingDetails.filter((detail) => detail.borrowingId === id);
-          for (const detail of details) {
-            const book = db.books.find((b) => b.id === detail.bookId);
-            if (book) {
-              book.quantity += detail.quantity;
-            }
+          const { error: updateError } = await supabase
+            .from('books')
+            .update({ quantity: book.quantity + detail.quantity })
+            .eq('id', detail.book_id);
+          if (updateError) {
+            send(res, 500, { message: 'Không thể hoàn kho sách.' });
+            return true;
           }
         }
-        borrowing.notes = body.notes ?? borrowing.notes;
-        writeDb(db);
-        send(res, 200, {
-          ...borrowing,
-          items: db.borrowingDetails.filter((detail) => detail.borrowingId === id),
-        });
-      })
-      .catch((error) => send(res, 400, { message: error.message }));
+      }
+      if (body.notes !== undefined) {
+        updates.notes = body.notes;
+      }
+      updates.updatedAt = new Date().toISOString();
+      const { data, error } = await supabase
+        .from('borrowings')
+        .update(toDbRecord('borrowings', updates))
+        .eq('id', id)
+        .select()
+        .maybeSingle();
+      if (error || !data) {
+        send(res, 500, { message: 'Không thể cập nhật phiếu mượn.' });
+        return true;
+      }
+      const { data: details } = await supabase
+        .from('borrowing_details')
+        .select('*')
+        .eq('borrowing_id', id);
+      send(res, 200, {
+        ...fromDbRecord('borrowings', data),
+        items: mapDbList('borrowingDetails', details || []),
+      });
+      return true;
+    } catch (error) {
+      send(res, 400, { message: error.message });
+      return true;
+    }
   }
 
   return false;
 }
 
-const server = http.createServer((req, res) => {
-  if (req.method === 'OPTIONS') {
-    handleOptions(req, res);
-    return;
-  }
-  ensureDataFile();
-  ensureAdminUser();
-  const parsedUrl = url.parse(req.url, true);
-  const pathname = parsedUrl.pathname;
-  const currentUser = loadUserFromRequest(req);
-
-  if (handleAuthRoutes(req, res, pathname) !== false) {
-    return;
-  }
-
-  if (pathname.startsWith('/api/users')) {
-    if (handleUsers(req, res, pathname, currentUser)) {
+const server = http.createServer(async (req, res) => {
+  try {
+    if (req.method === 'OPTIONS') {
+      handleOptions(req, res);
       return;
     }
-  }
 
-  if (pathname.startsWith('/api/books')) {
-    if (handleBooks(req, res, pathname, currentUser)) {
+    const parsedUrl = url.parse(req.url, true);
+    const pathname = parsedUrl.pathname || '/';
+
+    if (await handleAuthRoutes(req, res, pathname)) {
       return;
     }
-  }
 
-  if (pathname.startsWith('/api/categories')) {
-    if (handleSimpleResource(req, res, pathname, currentUser, 'categories')) {
-      return;
+    const currentUser = await loadUserFromRequest(req);
+
+    if (pathname.startsWith('/api/users')) {
+      if (await handleUsers(req, res, pathname, currentUser)) {
+        return;
+      }
     }
-  }
 
-  if (pathname.startsWith('/api/publishers')) {
-    if (handleSimpleResource(req, res, pathname, currentUser, 'publishers')) {
-      return;
+    if (pathname.startsWith('/api/books')) {
+      if (await handleBooks(req, res, pathname, currentUser)) {
+        return;
+      }
     }
-  }
 
-  if (pathname.startsWith('/api/borrowings')) {
-    if (handleBorrowings(req, res, pathname, currentUser)) {
-      return;
+    if (pathname.startsWith('/api/categories')) {
+      if (await handleSimpleResource(req, res, pathname, currentUser, 'categories')) {
+        return;
+      }
     }
-  }
 
-  notFound(res);
+    if (pathname.startsWith('/api/publishers')) {
+      if (await handleSimpleResource(req, res, pathname, currentUser, 'publishers')) {
+        return;
+      }
+    }
+
+    if (pathname.startsWith('/api/borrowings')) {
+      if (await handleBorrowings(req, res, pathname, currentUser)) {
+        return;
+      }
+    }
+
+    notFound(res);
+  } catch (error) {
+    console.error('Unhandled error:', error);
+    send(res, 500, { message: 'Lỗi máy chủ nội bộ.' });
+  }
 });
 
 server.listen(PORT, () => {
-  ensureDataFile();
-  ensureAdminUser();
+  ensureAdminUser().catch((error) => {
+    console.error('Failed to ensure admin user:', error);
+  });
   console.log(`📚 Library API chạy tại http://localhost:${PORT}`);
 });
