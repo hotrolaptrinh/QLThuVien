@@ -4,7 +4,9 @@
   "description": "Simple library management REST API with Supabase PostgreSQL persistence and JWT authentication",
   "main": "src/server.js",
   "scripts": {
-    "start": "node src/server.js"
+    "start": "node src/server.js",
+    "build": "node src/server.js"
+    
   },
   "keywords": [
     "library",
