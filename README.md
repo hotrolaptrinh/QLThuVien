@@ -18,7 +18,7 @@ QLThuVien/
 1. Cài đặt Node.js >= 18.
 2. Cấu hình Supabase cho backend theo hướng dẫn trong `backend/README.md` (tạo bảng và biến môi trường `.env`).
 3. Cài đặt phụ thuộc và chạy backend: `cd backend && npm install && node src/server.js`.
-4. Mở frontend: dùng Live Server mở `frontend/index.html` hoặc bất kỳ server tĩnh nào.
+4. Triển khai frontend: `cd frontend && npm install && npm run build` để tạo thư mục `dist/`, đặt biến môi trường `BACKEND_URL` khi cần và triển khai `dist/` lên dịch vụ tĩnh (VD: Vercel) hoặc chạy `npm start` để xem thử.
 5. Đăng nhập tài khoản quản lý mặc định `admin@library.local` / `Admin123!`.
 
 ## Tính năng nổi bật
